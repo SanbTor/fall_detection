@@ -8,14 +8,18 @@ import cv2
 from ultralytics import YOLO
 
 from camera import Camera
+from notificador import enviar_em_segundo_plano
 from regra_queda import ANGULO_DEITADO, TEMPO_ALERTA, RegraQueda
 
-# Uso: python src/detector_pessoa.py [arquivo_de_video] [--tempo 10]
+# Uso: python src/detector_pessoa.py [arquivo_de_video] [--tempo 10] [--avisar]
 parser = argparse.ArgumentParser()
 parser.add_argument("video", nargs="?",
                     help="arquivo de vídeo; sem ele, usa a câmera do .env")
 parser.add_argument("--tempo", type=float, default=TEMPO_ALERTA,
                     help="segundos no chão até alertar")
+# Sem --avisar, roda em "modo silencioso": só registra o que teria enviado
+parser.add_argument("--avisar", action="store_true",
+                    help="envia o alerta pelo Telegram")
 args = parser.parse_args()
 
 # YOLO-pose nano: além do retângulo, acha 17 pontos do corpo (keypoints)
@@ -143,6 +147,13 @@ while True:
     if regra.atualizar(tempo, angulo, hw, pessoas) == "alerta":
         print(f"ALERTA DE QUEDA em {tempo:.1f}s "
               f"({time.strftime('%H:%M:%S')})")
+        # Só texto: nenhuma imagem sai da casa
+        mensagem = (f"⚠️ Possível queda: pessoa no chão há {args.tempo:.0f} s "
+                    f"({time.strftime('%d/%m %H:%M')}). Verifique.")
+        if args.avisar:
+            enviar_em_segundo_plano(mensagem)
+        else:
+            print(f"[modo silencioso] teria enviado: {mensagem}")
     no_chao = regra.tempo_no_chao(tempo)
     if regra.alertou:
         cv2.rectangle(frame, (0, 0), (largura - 1, altura - 1), (0, 0, 255), 12)

@@ -29,8 +29,8 @@ fps = cap.get(cv2.CAP_PROP_FPS)
 if not 1 <= fps <= 60:  # algumas câmeras informam 0 ou um valor absurdo
     fps = 15
 
-os.makedirs("data", exist_ok=True)
-caminho = f"data/{nome}_{time.strftime('%Y%m%d_%H%M%S')}.mp4"
+os.makedirs("data/videos", exist_ok=True)
+caminho = f"data/videos/{nome}_{time.strftime('%Y%m%d_%H%M%S')}.mp4"
 gravador = cv2.VideoWriter(
     caminho, cv2.VideoWriter_fourcc(*"mp4v"), fps, (largura, altura)
 )

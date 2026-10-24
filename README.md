@@ -21,7 +21,9 @@ Os pesos do YOLO são baixados automaticamente para `models/` na primeira execu�
 | --- | --- |
 | `python src/detector_pessoa.py` | Detector ao vivo na câmera do `.env` |
 | `python src/detector_pessoa.py data/videos/ARQUIVO.mp4` | Detector num vídeo gravado |
-| `python src/gravar_video.py NOME 30` | Grava 30 s da câmera em `data/videos/` (10 s de contagem antes) |
+| `python src/detector_pessoa.py ARQUIVO.mp4 --tempo 10` | Idem, alertando após 10 s no chão (padrão: 30 s) |
+| `python src/gravar_video.py NOME 60` | Grava 60 s da câmera em `data/videos/` (10 s de contagem antes) |
+| `python src/simular_regra.py data/resultados/*.csv` | Passa os CSVs pela regra de queda e mostra quando alertaria |
 
 O detector salva um CSV por quadro (tempo, `h/w`, centro, ângulo do tronco) em
 `data/resultados/`, para análise em pandas. Tecla `q` fecha a janela.

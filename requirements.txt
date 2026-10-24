@@ -3,3 +3,4 @@ opencv-python==5.0.0.93
 python-dotenv==1.2.4
 ultralytics==8.4.187
 pandas==3.1.0
+requests==2.34.2

@@ -2,30 +2,19 @@ import os
 import sys
 import time
 
-os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
-
 import cv2
-from dotenv import load_dotenv
 
-load_dotenv()
-url = os.getenv("CAMERA_URL")
-if not url:
-    raise SystemExit("CAMERA_URL não encontrada no .env")
+from camera import Camera
 
 # Uso: python src/gravar_video.py nome_do_teste 30
 nome = sys.argv[1] if len(sys.argv) > 1 else "teste"
 DURACAO = int(sys.argv[2]) if len(sys.argv) > 2 else 30  # segundos
 ESPERA = 10  # segundos para você se posicionar antes de começar
 
-cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
-if not cap.isOpened():
-    raise SystemExit("Não consegui abrir o stream.")
-
-ok, frame = cap.read()
-if not ok:
-    raise SystemExit("Falha ao ler o primeiro quadro.")
+camera = Camera()  # câmera do .env, com reconexão automática
+frame = camera.ler()
 altura, largura = frame.shape[:2]
-fps = cap.get(cv2.CAP_PROP_FPS)
+fps = camera.fps
 if not 1 <= fps <= 60:  # algumas câmeras informam 0 ou um valor absurdo
     fps = 15
 
@@ -41,17 +30,13 @@ for i in range(ESPERA, 0, -1):
     print(f"Começa em {i}...")
     fim = time.time() + 1
     while time.time() < fim:
-        cap.read()
+        camera.ler()
 print(f"Gravando {DURACAO}s em {caminho}")
 
 inicio = time.time()
 while time.time() - inicio < DURACAO:
-    ok, frame = cap.read()
-    if not ok:
-        print("Falha ao ler o quadro.")
-        break
-    gravador.write(frame)
+    gravador.write(camera.ler())
 
 gravador.release()
-cap.release()
+camera.fechar()
 print("Pronto!")

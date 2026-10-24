@@ -4,12 +4,10 @@ import math
 import os
 import time
 
-os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
-
 import cv2
-from dotenv import load_dotenv
 from ultralytics import YOLO
 
+from camera import Camera
 from regra_queda import ANGULO_DEITADO, TEMPO_ALERTA, RegraQueda
 
 # Uso: python src/detector_pessoa.py [arquivo_de_video] [--tempo 10]
@@ -19,14 +17,6 @@ parser.add_argument("video", nargs="?",
 parser.add_argument("--tempo", type=float, default=TEMPO_ALERTA,
                     help="segundos no chão até alertar")
 args = parser.parse_args()
-
-load_dotenv()
-url = args.video or os.getenv("CAMERA_URL")
-if not url:
-    raise SystemExit("CAMERA_URL não encontrada no .env")
-eh_arquivo = os.path.isfile(url)
-if not eh_arquivo and not url.startswith("rtsp://"):
-    raise SystemExit(f"Arquivo não encontrado: {url}")
 
 # YOLO-pose nano: além do retângulo, acha 17 pontos do corpo (keypoints)
 modelo = YOLO("models/yolo11n-pose.pt")
@@ -71,15 +61,13 @@ def contar_pessoas(confs, principal):
     return 1 + sum(c >= CONFIANCA_CONTAGEM for c in outras)
 
 
-cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
-if not cap.isOpened():
-    raise SystemExit("Não consegui abrir o stream.")
-fps_video = cap.get(cv2.CAP_PROP_FPS)
+camera = Camera(args.video)  # sem vídeo, usa a câmera do .env
+fps_video = camera.fps
 
 # CSV com um registro por quadro, para analisar depois (pandas)
 os.makedirs("data/resultados", exist_ok=True)
-if eh_arquivo:
-    nome = os.path.splitext(os.path.basename(url))[0]
+if camera.eh_arquivo:
+    nome = os.path.splitext(os.path.basename(camera.url))[0]
 else:
     nome = f"camera_{time.strftime('%Y%m%d_%H%M%S')}"
 caminho_csv = f"data/resultados/{nome}.csv"
@@ -93,13 +81,13 @@ regra = RegraQueda(tempo_alerta=args.tempo)
 frames = 0
 inicio = time.time()
 while True:
-    ok, frame = cap.read()
-    if not ok:
-        print("Falha ao ler o quadro (ou o vídeo acabou).")
+    frame = camera.ler()  # na câmera, reconecta sozinho se cair
+    if frame is None:
+        print("O vídeo acabou.")
         break
     altura, largura = frame.shape[:2]
     # no arquivo, o tempo vem do vídeo; ao vivo, do relógio
-    if eh_arquivo and fps_video > 0:
+    if camera.eh_arquivo and fps_video > 0:
         tempo = frames / fps_video
     else:
         tempo = time.time() - inicio
@@ -177,6 +165,6 @@ while True:
         break
 
 arquivo_csv.close()
-cap.release()
+camera.fechar()
 cv2.destroyAllWindows()
 print(f"{frames} quadros registrados em {caminho_csv}")

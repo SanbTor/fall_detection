@@ -1,7 +1,7 @@
+import argparse
 import csv
 import math
 import os
-import sys
 import time
 
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
@@ -10,12 +10,18 @@ import cv2
 from dotenv import load_dotenv
 from ultralytics import YOLO
 
+from regra_queda import ANGULO_DEITADO, TEMPO_ALERTA, RegraQueda
+
+# Uso: python src/detector_pessoa.py [arquivo_de_video] [--tempo 10]
+parser = argparse.ArgumentParser()
+parser.add_argument("video", nargs="?",
+                    help="arquivo de vídeo; sem ele, usa a câmera do .env")
+parser.add_argument("--tempo", type=float, default=TEMPO_ALERTA,
+                    help="segundos no chão até alertar")
+args = parser.parse_args()
+
 load_dotenv()
-# Se passar um arquivo na linha de comando, usa ele; senão, a câmera do .env
-if len(sys.argv) > 1:
-    url = sys.argv[1]
-else:
-    url = os.getenv("CAMERA_URL")
+url = args.video or os.getenv("CAMERA_URL")
 if not url:
     raise SystemExit("CAMERA_URL não encontrada no .env")
 eh_arquivo = os.path.isfile(url)
@@ -25,6 +31,7 @@ if not eh_arquivo and not url.startswith("rtsp://"):
 # YOLO-pose nano: além do retângulo, acha 17 pontos do corpo (keypoints)
 modelo = YOLO("models/yolo11n-pose.pt")
 CONFIANCA_MINIMA = 0.35   # deitado, a confiança cai para ~0.5; 0.5 perdia quadros
+CONFIANCA_CONTAGEM = 0.6  # para contar "outra pessoa" (abajur chegou a 0.55)
 CONFIANCA_PONTO = 0.5     # confiança mínima de cada ponto usado no ângulo
 
 # Índices dos keypoints no padrão COCO
@@ -50,6 +57,20 @@ def angulo_tronco(pontos, confs):
     return math.degrees(math.atan2(dx, dy))
 
 
+def contar_pessoas(confs, principal):
+    """Conta pessoas para a regra "2+ pessoas não alerta".
+
+    A pessoa principal (a mais confiável) sempre conta, mesmo com confiança
+    baixa: deitada no chão ela pode ter só ~0.4. As outras só contam com
+    confiança alta, para um objeto parecido com gente (ex.: abajur) não
+    virar uma "segunda pessoa" e bloquear um alerta real.
+    """
+    if not confs:
+        return 0
+    outras = [c for i, c in enumerate(confs) if i != principal]
+    return 1 + sum(c >= CONFIANCA_CONTAGEM for c in outras)
+
+
 cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
 if not cap.isOpened():
     raise SystemExit("Não consegui abrir o stream.")
@@ -66,8 +87,9 @@ arquivo_csv = open(caminho_csv, "w", newline="")
 escritor = csv.writer(arquivo_csv)
 escritor.writerow(["quadro", "tempo_s", "pessoas", "conf",
                    "x1", "y1", "x2", "y2", "hw", "centro_x", "centro_y",
-                   "angulo_tronco"])
+                   "angulo_tronco", "deteccoes"])
 
+regra = RegraQueda(tempo_alerta=args.tempo)
 frames = 0
 inicio = time.time()
 while True:
@@ -82,7 +104,10 @@ while True:
     else:
         tempo = time.time() - inicio
 
-    resultado = modelo.predict(frame, conf=CONFIANCA_MINIMA, verbose=False)[0]
+    # iou=0.4: junta caixas sobrepostas da mesma pessoa (padrão 0.7 duplicava)
+    resultado = modelo.predict(
+        frame, conf=CONFIANCA_MINIMA, iou=0.4, verbose=False
+    )[0]
     # o modelo de pose só detecta pessoas, não precisa filtrar classe
     pontos_todos = resultado.keypoints.xy.tolist()
     confs_todos = resultado.keypoints.conf.tolist() if len(resultado.boxes) else []
@@ -96,29 +121,48 @@ while True:
         angulo = angulo_tronco(pontos_todos[i], confs_todos[i])
         angulos.append(angulo)
         texto_ang = f"{angulo:.0f} graus" if angulo is not None else "?"
-        # tronco > 60° da vertical: deitado (limite provisório)
-        cor = (0, 0, 255) if angulo is not None and angulo > 60 else (0, 255, 0)
+        deitado = angulo is not None and angulo > ANGULO_DEITADO
+        cor = (0, 0, 255) if deitado else (0, 255, 0)
         cv2.putText(frame, f"tronco={texto_ang}  h/w={hw:.2f}", (x1, y1 - 8),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, cor, 2)
 
     # Por enquanto registra só a pessoa mais confiável do quadro.
     # Quadro sem ninguém também vira linha (com campos vazios): os "buracos"
     # são informação importante para a regra de imobilidade.
-    if len(resultado.boxes):
-        i = max(range(len(resultado.boxes)),
-                key=lambda k: float(resultado.boxes.conf[k]))
+    # "deteccoes" = tudo que o YOLO achou; "pessoas" = o que a regra usa
+    deteccoes = len(resultado.boxes)
+    if deteccoes:
+        confs = resultado.boxes.conf.tolist()
+        i = max(range(deteccoes), key=lambda k: confs[k])
+        pessoas = contar_pessoas(confs, i)
         x1, y1, x2, y2 = map(int, resultado.boxes.xyxy[i])
         angulo = angulos[i]
+        hw = (y2 - y1) / (x2 - x1)
         escritor.writerow([
-            frames, round(tempo, 3), len(resultado.boxes),
-            round(float(resultado.boxes.conf[i]), 3), x1, y1, x2, y2,
-            round((y2 - y1) / (x2 - x1), 3),
+            frames, round(tempo, 3), pessoas,
+            round(confs[i], 3), x1, y1, x2, y2,
+            round(hw, 3),
             # centro normalizado: 0 = esquerda/topo, 1 = direita/base
             round((x1 + x2) / 2 / largura, 3), round((y1 + y2) / 2 / altura, 3),
             round(angulo, 1) if angulo is not None else "",
+            deteccoes,
         ])
     else:
-        escritor.writerow([frames, round(tempo, 3), 0] + [""] * 9)
+        pessoas, angulo, hw = 0, None, None
+        escritor.writerow([frames, round(tempo, 3), 0] + [""] * 9 + [0])
+
+    # Regra de queda: mesma classe usada no simular_regra.py
+    if regra.atualizar(tempo, angulo, hw, pessoas) == "alerta":
+        print(f"ALERTA DE QUEDA em {tempo:.1f}s "
+              f"({time.strftime('%H:%M:%S')})")
+    no_chao = regra.tempo_no_chao(tempo)
+    if regra.alertou:
+        cv2.rectangle(frame, (0, 0), (largura - 1, altura - 1), (0, 0, 255), 12)
+        cv2.putText(frame, "ALERTA: QUEDA", (10, 70),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.4, (0, 0, 255), 3)
+    elif no_chao > 0:
+        cv2.putText(frame, f"no chao: {no_chao:.0f}s / {args.tempo:.0f}s",
+                    (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 165, 255), 2)
 
     frames += 1
     fps = frames / (time.time() - inicio)
